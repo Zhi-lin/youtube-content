@@ -1,0 +1,25 @@
+name = "youtube-dialogue-article"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 前端构建产物作为静态资源；非 /api/* 路由由 Worker 回退到静态资源服务。
+[assets]
+directory = "dist/client"
+binding = "ASSETS"
+
+# 本次生成上下文（transcript / chapters / 5W1H）按 sessionId 存储，设 TTL。
+# 部署前需先创建：wrangler kv namespace create SESSIONS
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "b7226729bd2745568b7493b2b696c11c"
+
+[vars]
+# 章节切分策略：markdown（首版默认，## / ###）| sentinel（[[H2]] / [[H3]] 哨兵）
+CHAPTER_STRATEGY = "markdown"
+# Gemini 模型（AI Studio 免费档）
+GEMINI_MODEL = "gemini-2.5-flash"
+
+# 机密通过 secret 注入，不写进仓库：
+#   wrangler secret put GEMINI_API_KEY
+#   wrangler secret put WEBSHARE_PROXY   # 形如 host:port:user:pass，可选

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YouTube 字幕 → 对话文章</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <h1>YouTube 字幕 → 中文对话文章</h1>
+        <p class="subtitle">输入有字幕的 YouTube 链接，流式生成对话体文章，每个大章节可一键 5W1H 总结。</p>
+      </header>
+
+      <form id="gen-form" class="panel">
+        <label class="field">
+          <span class="field-label">YouTube 链接</span>
+          <input
+            id="url"
+            type="url"
+            placeholder="https://www.youtube.com/watch?v=xRh2sVcNXQ8"
+            required
+          />
+        </label>
+
+        <details class="advanced">
+          <summary>生成要求（可选）</summary>
+          <textarea
+            id="requirement"
+            rows="3"
+            placeholder="例如：面向产品经理，输出风格专业克制，重点提炼商业模式与定价策略。"
+          ></textarea>
+        </details>
+
+        <div class="actions">
+          <button type="submit" id="submit-btn">生成文章</button>
+          <button type="button" id="sample-btn" class="link-btn">填入演示视频</button>
+        </div>
+      </form>
+
+      <section id="status" class="status" hidden></section>
+      <article id="article" class="article" hidden></article>
+      <footer id="timing" class="timing" hidden></footer>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
