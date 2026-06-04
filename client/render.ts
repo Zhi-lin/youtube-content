@@ -49,24 +49,76 @@ function toDialogue(line: string): string {
   )}：</span>${escapeHtml(content)}</p>`;
 }
 
-/** 给文章里的大章节 <h2> 注入 [5W1H] 按钮（按 chapters 顺序）。 */
-export function injectChapterButtons(
+/** 给单个 <h2> 注入 [5W1H] 按钮（已存在则跳过）。chapterId = H2 顺序索引。 */
+export function attachButton(
+  h2: HTMLElement,
+  chapterId: number,
+  onClick: (chapterId: number, h2: HTMLElement) => void,
+): void {
+  if (h2.querySelector(".w5h1-btn")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "w5h1-btn";
+  btn.textContent = "5W1H";
+  btn.dataset.chapterId = String(chapterId);
+  btn.addEventListener("click", () => onClick(chapterId, h2));
+  h2.appendChild(btn);
+}
+
+/**
+ * 流式过程中：给「已完成」的大章节注入 5W1H 按钮。
+ * 判定：当文中已有 N 个 <h2> 时，前 N-1 个必已写完（其后已出现下一个标题），
+ * 立即给它们加按钮；最后一个待全文结束由 finalizeChapterButtons 补上。
+ * chapterId 取 H2 顺序索引，与后端 parseChapters 的 id 规则一致。
+ */
+export function injectButtonsForCompletedChapters(
   root: HTMLElement,
-  chapters: { id: number; title: string }[],
   onClick: (chapterId: number, h2: HTMLElement) => void,
 ): void {
   const h2s = Array.from(root.querySelectorAll("h2"));
-  chapters.forEach((ch, idx) => {
-    const h2 = h2s[idx];
-    if (!h2 || h2.querySelector(".w5h1-btn")) return;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "w5h1-btn";
-    btn.textContent = "5W1H";
-    btn.dataset.chapterId = String(ch.id);
-    btn.addEventListener("click", () => onClick(ch.id, h2));
-    h2.appendChild(btn);
-  });
+  for (let i = 0; i < h2s.length - 1; i++) {
+    attachButton(h2s[i] as HTMLElement, i, onClick);
+  }
+}
+
+/** 全文结束：给所有 <h2>（含最后一个）补齐 5W1H 按钮。 */
+export function finalizeChapterButtons(
+  root: HTMLElement,
+  onClick: (chapterId: number, h2: HTMLElement) => void,
+): void {
+  const h2s = Array.from(root.querySelectorAll("h2"));
+  h2s.forEach((h2, i) => attachButton(h2 as HTMLElement, i, onClick));
+}
+
+/**
+ * 把（可能半成品的）markdown 按 `## ` 切成块。
+ * 返回 { head, chapters }：head 是第一个 `##` 之前的内容（# 大标题等）；
+ * chapters[i] 是第 i 个 `## ` 章节的完整 markdown（含其标题行）。
+ * 口径与后端 splitByH2 一致：行首 `## ` 且非 `###` 才算章节边界。
+ */
+export function splitMarkdownByChapter(markdown: string): {
+  head: string;
+  chapters: string[];
+} {
+  const lines = markdown.split("\n");
+  const headLines: string[] = [];
+  const chapters: string[][] = [];
+  let cur: string[] | null = null;
+  for (const line of lines) {
+    const t = line.trimStart();
+    if (/^##\s/.test(t) && !/^###\s/.test(t)) {
+      cur = [line];
+      chapters.push(cur);
+    } else if (cur) {
+      cur.push(line);
+    } else {
+      headLines.push(line);
+    }
+  }
+  return {
+    head: headLines.join("\n"),
+    chapters: chapters.map((c) => c.join("\n")),
+  };
 }
 
 /** 5W1H 键值表格卡片。 */

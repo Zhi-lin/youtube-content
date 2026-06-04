@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>YouTube 字幕 → 对话文章</title>
+    <title>TalkScript · 重新定义视频字幕的价值</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="container">
       <header class="hero">
-        <h1>YouTube 字幕 → 中文对话文章</h1>
-        <p class="subtitle">输入有字幕的 YouTube 链接，流式生成对话体文章，每个大章节可一键 5W1H 总结。</p>
+        <h1>TalkScript</h1>
+        <p class="subtitle">重新定义视频字幕的价值</p>
       </header>
 
       <form id="gen-form" class="panel">
@@ -43,6 +43,16 @@
       <article id="article" class="article" hidden></article>
       <footer id="timing" class="timing" hidden></footer>
     </main>
+
+    <!-- 右侧固定 5W1H 面板：点章节 5W1H 按钮时滑入，显示该章总结。 -->
+    <aside id="w5h1-panel" class="w5h1-panel" hidden aria-hidden="true">
+      <header class="w5h1-panel-head">
+        <span class="w5h1-panel-tag">5W1H</span>
+        <h3 id="w5h1-panel-title" class="w5h1-panel-title"></h3>
+        <button type="button" id="w5h1-panel-close" class="w5h1-panel-close" aria-label="关闭">×</button>
+      </header>
+      <div id="w5h1-panel-body" class="w5h1-panel-body"></div>
+    </aside>
 
     <script type="module" src="./main.ts"></script>
   </body>

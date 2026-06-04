@@ -31,11 +31,20 @@ export async function* streamText(
   }
 
   // 逐行解析 SSE：每个事件是一行 `data: {json}`。
+  // 加空闲超时：Gemini 流偶发「发完内容但连接不关、不发结束标记」，
+  // 导致 reader.read() 永久挂起、后端走不到收尾、前端状态条卡住。
+  // 若 IDLE_MS 内无新数据，判定上游已结束，主动收尾。
+  const IDLE_MS = 15_000;
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
-    const { value, done } = await reader.read();
+    const result = await readWithIdleTimeout(reader, IDLE_MS);
+    if (result === "idle") {
+      await reader.cancel().catch(() => {});
+      break;
+    }
+    const { value, done } = result;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let nl: number;
@@ -48,6 +57,22 @@ export async function* streamText(
       const piece = extractText(payload);
       if (piece) yield piece;
     }
+  }
+}
+
+/** reader.read() 与空闲计时器竞争。超时返回 "idle"，否则返回 read 结果。 */
+async function readWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleMs: number,
+): Promise<ReadableStreamReadResult<Uint8Array> | "idle"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"idle">((resolve) => {
+    timer = setTimeout(() => resolve("idle"), idleMs);
+  });
+  try {
+    return await Promise.race([reader.read(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

@@ -19,6 +19,8 @@ id = "b7226729bd2745568b7493b2b696c11c"
 CHAPTER_STRATEGY = "markdown"
 # Gemini 模型（AI Studio 免费档）
 GEMINI_MODEL = "gemini-2.5-flash"
+# 备用模型：Gemini 失败时降级到小米 MiMo（OpenAI 兼容）
+MIMO_MODEL = "mimo-v2.5-pro"
 
 # 机密通过 secret 注入，不写进仓库：
 #   wrangler secret put GEMINI_API_KEY

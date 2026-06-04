@@ -8,8 +8,14 @@ export interface Env {
   CHAPTER_STRATEGY: string;
   GEMINI_MODEL: string;
   GEMINI_API_KEY: string;
+  /** 可选：小米 MiMo 备用模型（Gemini 失败时降级）。OpenAI 兼容。 */
+  MIMO_API_KEY?: string;
+  /** MiMo 模型名，默认 mimo-v2.5-pro。 */
+  MIMO_MODEL?: string;
   /** 可选：host:port:user:pass */
   WEBSHARE_PROXY?: string;
+  /** 可选：Supadata 字幕 API key（绕过 YouTube 对数据中心 IP 的风控）。 */
+  SUPADATA_API_KEY?: string;
 }
 
 /** 一个大章节（## 级别）。body 含其下所有 ### 小节正文。 */
@@ -54,5 +60,5 @@ export interface TranscriptResult {
   title: string;
   text: string;
   /** 命中的来源，用于埋点与降级可观测。 */
-  source: "direct" | "proxy" | "fixture";
+  source: "direct" | "proxy" | "supadata" | "fixture";
 }

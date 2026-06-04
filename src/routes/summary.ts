@@ -1,6 +1,7 @@
 import type { Env } from "../types";
 import { loadSession, loadSummary, saveSummary } from "../store/session";
 import { generateFiveW1H } from "../gemini/client";
+import { fiveW1HViaMimo } from "../pipeline/summarize";
 import { fiveW1HSystemInstruction, fiveW1HUserPrompt } from "../gemini/prompts";
 
 /**
@@ -28,19 +29,25 @@ export async function handleSummary(req: Request, env: Env): Promise<Response> {
   const chapter = session.chapters.find((c) => c.id === chapterId);
   if (!chapter) return json({ error: "章节不存在" }, 404);
 
+  const sys = fiveW1HSystemInstruction();
+  const prompt = fiveW1HUserPrompt(session.transcript, chapter);
   try {
-    const data = await generateFiveW1H(
-      fiveW1HUserPrompt(session.transcript, chapter),
-      {
+    let data;
+    try {
+      data = await generateFiveW1H(prompt, {
         apiKey: env.GEMINI_API_KEY,
         model: env.GEMINI_MODEL,
-        systemInstruction: fiveW1HSystemInstruction(),
-      },
-    );
+        systemInstruction: sys,
+      });
+    } catch (e) {
+      // Gemini 失败（如 429 配额）→ 降级到 MiMo（无 key 则继续抛）。
+      if (!env.MIMO_API_KEY) throw e;
+      data = await fiveW1HViaMimo(prompt, sys, env);
+    }
     await saveSummary(env, sessionId, chapterId, data);
     return json(data, 200);
   } catch (e) {
-    // 可能是限流：让前端按 202 短暂重试。
+    // 两条链路都失败：让前端按 202 短暂重试。
     return json({ error: String(e) }, 202);
   }
 }

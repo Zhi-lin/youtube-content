@@ -1,6 +1,7 @@
 import {
   renderArticle,
-  injectChapterButtons,
+  splitMarkdownByChapter,
+  attachButton,
   renderFiveW1HCard,
   type FiveW1H,
 } from "./render";
@@ -16,8 +17,20 @@ const statusEl = byId<HTMLElement>("status");
 const articleEl = byId<HTMLElement>("article");
 const timingEl = byId<HTMLElement>("timing");
 
+// 右侧 5W1H 面板元素。
+const panelEl = byId<HTMLElement>("w5h1-panel");
+const panelTitleEl = byId<HTMLElement>("w5h1-panel-title");
+const panelBodyEl = byId<HTMLElement>("w5h1-panel-body");
+const panelCloseEl = byId<HTMLButtonElement>("w5h1-panel-close");
+
 let sessionId = "";
 const summaryCache = new Map<number, FiveW1H>();
+/** 正在生成总结（请求未返回）的章节，避免重复请求、保持 loading 态。 */
+const pendingChapters = new Set<number>();
+/** 当前面板正在展示的章节 id（null=未打开）。 */
+let activeChapter: number | null = null;
+
+panelCloseEl.addEventListener("click", closePanel);
 
 sampleBtn.addEventListener("click", () => {
   urlInput.value = SAMPLE_URL;
@@ -33,6 +46,8 @@ async function generate(url: string, requirement: string) {
   setBusy(true);
   setStatus("正在获取字幕…");
 
+  let renderer: ChapterRenderer | null = null;
+  let markdown = "";
   try {
     const res = await fetch("/api/generate", {
       method: "POST",
@@ -44,11 +59,9 @@ async function generate(url: string, requirement: string) {
       throw new Error(msg || `请求失败 (${res.status})`);
     }
 
-    articleEl.hidden = false;
     let firstToken = true;
-    let markdown = "";
-    let chapters: { id: number; title: string }[] = [];
     const follow = autoFollow();
+    renderer = new ChapterRenderer(articleEl);
 
     await readSse(res.body, (evt) => {
       switch (evt.type) {
@@ -61,15 +74,18 @@ async function generate(url: string, requirement: string) {
         case "delta":
           if (firstToken) {
             firstToken = false;
+            // 第一个文字到达才显示文章框，取字幕/等待期间不露空框。
+            articleEl.hidden = false;
             setStatus("正在生成文章…");
           }
           markdown += evt.text;
-          articleEl.innerHTML = renderArticle(markdown);
-          articleEl.classList.add("cursor");
+          // 只重渲染「最后一个正在生成的章节」，已完成章节 DOM 冻结——
+          // 避免闪烁、保证已出现的 5W1H 按钮/展开卡片稳定可点。
+          renderer.update(markdown, /* streaming */ true);
           follow.tick();
           break;
         case "chapters":
-          chapters = evt.chapters;
+          // 章节边界前端已自行推断（## 顺序），此事件保留兼容，无需处理。
           break;
         case "timing":
           renderTiming(evt.timing);
@@ -79,45 +95,248 @@ async function generate(url: string, requirement: string) {
       }
     });
 
-    // 收尾：去掉光标，挂按钮。
-    articleEl.classList.remove("cursor");
-    articleEl.innerHTML = renderArticle(markdown);
-    injectChapterButtons(articleEl, chapters, onFiveW1HClick);
+    // 收尾：定稿最后一章（去光标、挂按钮）。
+    renderer.update(markdown, /* streaming */ false);
     clearStatus();
   } catch (err) {
+    // 流中断也保留已生成内容：定稿当前内容，已出现的章节仍可逐章总结。
+    if (renderer) renderer.update(markdown, /* streaming */ false);
     showError(err instanceof Error ? err.message : String(err));
   } finally {
     setBusy(false);
   }
 }
 
-async function onFiveW1HClick(chapterId: number, h2: HTMLElement) {
-  const existing = h2.nextElementSibling;
-  if (existing && existing.classList.contains("w5h1-card")) {
-    existing.remove(); // 再次点击收起
-    return;
+/**
+ * 增量章节渲染器：把文章按 `## ` 分块渲染到独立容器，
+ * 流式时只重渲染「最后一个正在生成的章节」，已完成章节 DOM 冻结。
+ *
+ * 解决全量 innerHTML 重建导致的：①闪烁 ②点击落空 ③展开的 5W1H 卡片被冲掉。
+ */
+class ChapterRenderer {
+  private headEl: HTMLElement;
+  /** 各章节的容器，索引即 chapterId（与后端 H2 顺序一致）。 */
+  private blocks: HTMLElement[] = [];
+  /** 已「定稿」（不再重渲染）的章节数。 */
+  private frozen = 0;
+
+  constructor(private root: HTMLElement) {
+    this.root.innerHTML = "";
+    this.headEl = document.createElement("div");
+    this.headEl.className = "article-head";
+    this.root.appendChild(this.headEl);
   }
 
-  const card = document.createElement("div");
-  card.className = "w5h1-card";
-  h2.after(card);
+  /**
+   * @param markdown 当前累积的全文
+   * @param streaming true=生成中（最后一章带光标、不挂按钮）；false=定稿（去光标、挂按钮）
+   */
+  update(markdown: string, streaming: boolean): void {
+    const { head, chapters } = splitMarkdownByChapter(markdown);
 
+    // 头部（# 大标题等）：仅在变化时更新，开销极小。
+    const headHtml = head.trim() ? renderArticle(head) : "";
+    if (this.headEl.innerHTML !== headHtml) this.headEl.innerHTML = headHtml;
+
+    // 为新出现的章节创建容器。
+    for (let i = this.blocks.length; i < chapters.length; i++) {
+      const el = document.createElement("section");
+      el.className = "chapter-block";
+      this.root.appendChild(el);
+      this.blocks.push(el);
+    }
+
+    // 定稿已完成的章节（除最后一章外，或非 streaming 时含最后一章）。
+    const lastIdx = chapters.length - 1;
+    const freezeUpTo = streaming ? lastIdx : chapters.length; // 不含/含最后一章
+    for (let i = this.frozen; i < freezeUpTo; i++) {
+      this.renderBlock(i, chapters[i], /* withCursor */ false, /* withButton */ true);
+    }
+    this.frozen = Math.max(this.frozen, freezeUpTo);
+
+    // 最后一章正在生成：只重渲染它（带光标、暂不挂按钮）。
+    if (streaming && lastIdx >= this.frozen && lastIdx >= 0) {
+      this.renderBlock(lastIdx, chapters[lastIdx], /* withCursor */ true, /* withButton */ false);
+    }
+  }
+
+  private renderBlock(
+    id: number,
+    md: string,
+    withCursor: boolean,
+    withButton: boolean,
+  ): void {
+    const el = this.blocks[id];
+    if (!el) return;
+    el.innerHTML = renderArticle(md);
+    if (withCursor) el.classList.add("cursor");
+    else el.classList.remove("cursor");
+    if (withButton) {
+      const h2 = el.querySelector("h2");
+      if (h2) attachButton(h2 as HTMLElement, id, onFiveW1HClick);
+    }
+  }
+}
+
+/** 点击章节 5W1H 按钮：未开则开+查；已在看同章则收起。点击会主动触发生成。 */
+function onFiveW1HClick(chapterId: number, h2: HTMLElement) {
+  if (activeChapter === chapterId) {
+    closePanel();
+    return;
+  }
+  const title = chapterTitle(h2);
+  showChapterInPanel(chapterId, title, /* triggerGenerate */ true);
+}
+
+/** 从 h2 取纯标题文字（去掉 5W1H 按钮文本）。 */
+function chapterTitle(h2: HTMLElement): string {
+  return (h2.childNodes[0]?.textContent ?? "").trim();
+}
+
+/**
+ * 在面板中展示某章的 5W1H。
+ * @param triggerGenerate 缓存未命中时是否主动请求生成。
+ *   点击=true（用户意图明确）；滚动联动=false（只展示已有，否则会狂刷 API）。
+ */
+async function showChapterInPanel(
+  chapterId: number,
+  title: string,
+  triggerGenerate: boolean,
+) {
+  openPanel(chapterId, title);
+
+  // 已有缓存 → 完成态，直接渲染。
   if (summaryCache.has(chapterId)) {
-    card.innerHTML = renderFiveW1HCard(summaryCache.get(chapterId)!);
+    setChapterState(chapterId, "done");
+    panelBodyEl.innerHTML = renderFiveW1HCard(summaryCache.get(chapterId)!);
     return;
   }
 
-  card.innerHTML = `<div class="loading">总结生成中…</div>`;
+  // 无缓存且不主动生成（滚动联动）。
+  if (!triggerGenerate) {
+    // 该章正在生成中 → 显示生成中，不打断、不重复请求。
+    if (pendingChapters.has(chapterId)) {
+      setChapterState(chapterId, "loading");
+      panelBodyEl.innerHTML = `<div class="loading">总结生成中…</div>`;
+      return;
+    }
+    // 否则未生成态，只显示提示。
+    setChapterState(chapterId, "idle");
+    panelBodyEl.innerHTML =
+      `<div class="hint">该章节尚未生成总结。<br/>点此章的 <b>5W1H</b> 按钮即可生成。</div>`;
+    return;
+  }
+
+  // 生成中态。
+  setChapterState(chapterId, "loading");
+  panelBodyEl.innerHTML = `<div class="loading">总结生成中…</div>`;
+
+  // 已有在途请求 → 不重复发起，等它返回即可（loading 态已展示）。
+  if (pendingChapters.has(chapterId)) return;
+
+  pendingChapters.add(chapterId);
   try {
     const data = await fetchSummary(chapterId);
     summaryCache.set(chapterId, data);
-    card.innerHTML = renderFiveW1HCard(data);
+    setChapterState(chapterId, "done"); // 成功 → 绿（无论面板是否还开着）
+    if (activeChapter === chapterId) {
+      panelBodyEl.innerHTML = renderFiveW1HCard(data);
+    }
   } catch (err) {
-    card.innerHTML = `<div class="err">总结获取失败：${
-      err instanceof Error ? err.message : String(err)
-    }</div>`;
+    setChapterState(chapterId, "idle"); // 失败 → 回到未生成，可重试
+    if (activeChapter === chapterId) {
+      panelBodyEl.innerHTML = `<div class="err">总结获取失败：${
+        err instanceof Error ? err.message : String(err)
+      }</div>`;
+    }
+  } finally {
+    pendingChapters.delete(chapterId);
   }
 }
+
+type ChapterState = "idle" | "loading" | "done";
+
+/**
+ * 设置某章的状态，同步「流式框里的按钮」与「面板标签」的三态配色。
+ * idle=灰(未生成) / loading=蓝(生成中) / done=绿(完成)。
+ */
+function setChapterState(chapterId: number, state: ChapterState) {
+  const btn = buttonOf(chapterId);
+  if (btn) {
+    btn.classList.toggle("loading", state === "loading");
+    btn.classList.toggle("done", state === "done");
+  }
+  // 面板标签只反映「当前正在查看的章」的状态。
+  if (activeChapter === chapterId) {
+    panelEl.classList.toggle("state-loading", state === "loading");
+    panelEl.classList.toggle("state-done", state === "done");
+  }
+}
+
+/** 打开/切换右侧面板到某章。切章时先清面板标签状态，由 showChapterInPanel 重设。 */
+function openPanel(chapterId: number, title: string) {
+  activeChapter = chapterId;
+  panelTitleEl.textContent = title;
+  panelEl.classList.remove("state-loading", "state-done");
+  panelEl.hidden = false;
+  panelEl.setAttribute("aria-hidden", "false");
+  document.body.classList.add("panel-open");
+  requestAnimationFrame(() => panelEl.classList.add("open"));
+  highlightActiveButton(chapterId);
+}
+
+/** 关闭右侧面板。 */
+function closePanel() {
+  activeChapter = null;
+  panelEl.classList.remove("open", "state-loading", "state-done");
+  panelEl.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("panel-open");
+  highlightActiveButton(null);
+  setTimeout(() => {
+    if (activeChapter === null) panelEl.hidden = true;
+  }, 280);
+}
+
+/** 标记当前面板查看中的章节按钮（.active 发光环，不影响三态色）。 */
+function highlightActiveButton(chapterId: number | null) {
+  articleEl.querySelectorAll(".w5h1-btn.active").forEach((b) =>
+    b.classList.remove("active"),
+  );
+  if (chapterId === null) return;
+  buttonOf(chapterId)?.classList.add("active");
+}
+
+function buttonOf(chapterId: number): HTMLElement | null {
+  return articleEl.querySelector(`.w5h1-btn[data-chapter-id="${chapterId}"]`);
+}
+
+/**
+ * 滚动联动：面板打开时，找视口顶部附近最靠上的章节，自动切换面板到该章。
+ * 只展示已有总结（不主动生成）。节流到每帧一次。
+ */
+let followScrollRaf = 0;
+function onArticleScroll() {
+  if (activeChapter === null) return; // 面板没开就不联动
+  if (followScrollRaf) return;
+  followScrollRaf = requestAnimationFrame(() => {
+    followScrollRaf = 0;
+    const blocks = Array.from(
+      articleEl.querySelectorAll<HTMLElement>(".chapter-block"),
+    );
+    if (!blocks.length) return;
+    // 选「标题顶部已越过视口 ~120px 线」的最后一个章节（即当前正在读的章）。
+    const line = 120;
+    let current = 0;
+    blocks.forEach((b, i) => {
+      if (b.getBoundingClientRect().top <= line) current = i;
+    });
+    if (current !== activeChapter) {
+      const h2 = blocks[current]?.querySelector("h2");
+      if (h2) showChapterInPanel(current, chapterTitle(h2 as HTMLElement), false);
+    }
+  });
+}
+window.addEventListener("scroll", onArticleScroll, { passive: true });
 
 /** 拉取 5W1H；后台未算完返回 202 时短暂重试。 */
 async function fetchSummary(chapterId: number): Promise<FiveW1H> {
@@ -209,6 +428,7 @@ function resetUi() {
   articleEl.hidden = true;
   timingEl.hidden = true;
   statusEl.classList.remove("error");
+  closePanel();
 }
 function setBusy(b: boolean) {
   submitBtn.disabled = b;

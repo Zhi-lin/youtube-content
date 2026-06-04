@@ -9,6 +9,7 @@ import {
 } from "./innertube";
 import { parseJson3 } from "./timedtext";
 import { getFixture } from "./fixtures";
+import { fetchViaSupadata } from "./supadata";
 
 /** 从各种 YouTube URL 形态提取 videoId。 */
 export function extractVideoId(input: string): string | null {
@@ -32,14 +33,15 @@ export function extractVideoId(input: string): string | null {
  * 分层降级取字幕：
  *  1. 直连 youtubei（Worker fetch）
  *  2. 经 Webshare 代理重试（TCP Socket）
- *  3. 演示视频回落硬编码字幕
- *  4. 否则抛友好错误
+ *  3. Supadata 第三方字幕 API（绕过数据中心 IP 风控）
+ *  4. 演示视频回落硬编码字幕
+ *  5. 否则抛友好错误
  */
 export async function fetchTranscript(
   videoId: string,
-  proxyRaw: string | undefined,
+  env: { WEBSHARE_PROXY?: string; SUPADATA_API_KEY?: string },
 ): Promise<TranscriptResult> {
-  const proxy = parseProxy(proxyRaw);
+  const proxy = parseProxy(env.WEBSHARE_PROXY);
   const diag: string[] = []; // 累积各阶段失败原因，附到最终错误便于排查
 
   // 1. 直连
@@ -66,7 +68,21 @@ export async function fetchTranscript(
     diag.push("proxy: 未配置 WEBSHARE_PROXY");
   }
 
-  // 3. 硬编码兜底
+  // 3. Supadata 第三方字幕 API
+  if (env.SUPADATA_API_KEY) {
+    try {
+      const r = await fetchViaSupadata(videoId, env.SUPADATA_API_KEY);
+      if (r) return { ...r, videoId, source: "supadata" };
+      diag.push("supadata: 无字幕内容");
+    } catch (e) {
+      diag.push(`supadata: ${String(e)}`);
+      console.log(JSON.stringify({ stage: "transcript.supadata", error: String(e) }));
+    }
+  } else {
+    diag.push("supadata: 未配置 SUPADATA_API_KEY");
+  }
+
+  // 4. 硬编码兜底
   const fx = getFixture(videoId);
   if (fx) {
     console.log(JSON.stringify({ stage: "transcript.fixture", videoId }));
