@@ -5,14 +5,21 @@ import {
   renderFiveW1HCard,
   type FiveW1H,
 } from "./render";
+import { parseSubtitle } from "./subtitle";
 
 const SAMPLE_URL = "https://www.youtube.com/watch?v=xRh2sVcNXQ8";
 
 const form = byId<HTMLFormElement>("gen-form");
 const urlInput = byId<HTMLInputElement>("url");
+const urlLabel = byId<HTMLElement>("url-label");
 const reqInput = byId<HTMLTextAreaElement>("requirement");
 const submitBtn = byId<HTMLButtonElement>("submit-btn");
+const cancelBtn = byId<HTMLButtonElement>("cancel-btn");
 const sampleBtn = byId<HTMLButtonElement>("sample-btn");
+const sourceSeg = byId<HTMLElement>("source-seg");
+const fileField = byId<HTMLElement>("file-field");
+const fileInput = byId<HTMLInputElement>("subtitle-file");
+const fileHint = byId<HTMLElement>("file-hint");
 const statusEl = byId<HTMLElement>("status");
 const articleEl = byId<HTMLElement>("article");
 const timingEl = byId<HTMLElement>("timing");
@@ -32,79 +39,249 @@ let activeChapter: number | null = null;
 
 panelCloseEl.addEventListener("click", closePanel);
 
+/** 当前生成的中止控制器；null=空闲。点「取消生成」时 abort，从而中断 fetch/SSE。 */
+let genAbort: AbortController | null = null;
+
+cancelBtn.addEventListener("click", () => {
+  genAbort?.abort();
+});
+
 sampleBtn.addEventListener("click", () => {
   urlInput.value = SAMPLE_URL;
 });
 
+// ---------- 字幕来源：线上 / 本地 ----------
+
+type Source = "online" | "local";
+let source: Source = "online";
+/** 本地模式下已解析的字幕文本与标题（文件名）。 */
+let localTranscript = "";
+let localTitle = "";
+
+sourceSeg.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".seg-btn");
+  if (!btn) return;
+  setSource((btn.dataset.source as Source) ?? "online");
+});
+
+function setSource(next: Source) {
+  source = next;
+  sourceSeg.querySelectorAll<HTMLButtonElement>(".seg-btn").forEach((b) => {
+    const on = b.dataset.source === next;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-checked", String(on));
+  });
+  const local = next === "local";
+  fileField.hidden = !local;
+  // 本地模式链接可选（去掉 required），标签提示「可选」。
+  urlInput.required = !local;
+  urlLabel.textContent = local ? "YouTube 链接（可选，用于元信息）" : "YouTube 链接";
+}
+
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files?.[0];
+  if (!file) {
+    localTranscript = "";
+    localTitle = "";
+    setFileHint("未选择文件", "");
+    return;
+  }
+  setFileHint(`正在读取 ${file.name}…`, "");
+  try {
+    const raw = await file.text();
+    const parsed = parseSubtitle(raw, file.name);
+    if (!parsed.trim()) throw new Error("文件解析后无有效字幕文本");
+    localTranscript = parsed;
+    localTitle = stripExt(file.name);
+    const chars = parsed.length;
+    setFileHint(`已读取 ${file.name}（约 ${chars} 字）`, "ok");
+  } catch (err) {
+    localTranscript = "";
+    localTitle = "";
+    setFileHint(
+      `读取失败：${err instanceof Error ? err.message : String(err)}`,
+      "err",
+    );
+  }
+});
+
+function setFileHint(msg: string, cls: "" | "ok" | "err") {
+  fileHint.textContent = msg;
+  fileHint.classList.remove("ok", "err");
+  if (cls) fileHint.classList.add(cls);
+}
+
+function stripExt(name: string): string {
+  return name.replace(/\.[^.]+$/, "");
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (source === "local" && !localTranscript.trim()) {
+    setFileHint("请先选择本地字幕文件", "err");
+    return;
+  }
   await generate(urlInput.value.trim(), reqInput.value.trim());
 });
 
+/** 客户端续写轮数上限（与服务端 MAX_RESUME_ROUNDS 双向封顶，防死循环）。 */
+const MAX_ROUNDS = 8;
+
 async function generate(url: string, requirement: string) {
   resetUi();
+  // 新一轮生成的中止控制器；取消按钮 abort 它即可中断本轮所有 fetch/SSE。
+  const abort = new AbortController();
+  genAbort = abort;
+  // 快照本地字幕（仅首段发送；续段不重发 transcript）。
+  const local =
+    source === "local"
+      ? { transcript: localTranscript, title: localTitle }
+      : null;
   setBusy(true);
-  setStatus("正在获取字幕…");
+  setStatus(local ? "正在读取本地字幕…" : "正在获取字幕…");
 
-  let renderer: ChapterRenderer | null = null;
+  // markdown 与 renderer 跨段只建一次：服务端续段不重发已有内容，故持续 append 不会重复渲染。
   let markdown = "";
+  const renderer = new ChapterRenderer(articleEl);
+  const follow = autoFollow();
+  const ui = { firstToken: true };
+
   try {
-    const res = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, requirement }),
-    });
-    if (!res.ok || !res.body) {
-      const msg = await res.text().catch(() => "");
-      throw new Error(msg || `请求失败 (${res.status})`);
-    }
+    let resume: { sessionId: string; round: number } | null = null;
 
-    let firstToken = true;
-    const follow = autoFollow();
-    renderer = new ChapterRenderer(articleEl);
-
-    await readSse(res.body, (evt) => {
-      switch (evt.type) {
-        case "session":
-          sessionId = evt.sessionId;
-          break;
-        case "status":
-          setStatus(evt.message);
-          break;
-        case "delta":
-          if (firstToken) {
-            firstToken = false;
+    for (let round = 0; round <= MAX_ROUNDS; round++) {
+      const before = markdown.length;
+      const outcome = await runSegment({
+        url,
+        requirement,
+        resume,
+        // 本地字幕只在首段（resume==null）发送。
+        local: resume ? null : local,
+        signal: abort.signal,
+        getMarkdown: () => markdown,
+        onDelta: (text) => {
+          if (ui.firstToken) {
+            ui.firstToken = false;
             // 第一个文字到达才显示文章框，取字幕/等待期间不露空框。
             articleEl.hidden = false;
             setStatus("正在生成文章…");
           }
-          markdown += evt.text;
-          // 只重渲染「最后一个正在生成的章节」，已完成章节 DOM 冻结——
-          // 避免闪烁、保证已出现的 5W1H 按钮/展开卡片稳定可点。
+          markdown += text;
+          // 只重渲染「最后一个正在生成的章节」，已完成章节 DOM 冻结。
           renderer.update(markdown, /* streaming */ true);
           follow.tick();
-          break;
-        case "chapters":
-          // 章节边界前端已自行推断（## 顺序），此事件保留兼容，无需处理。
-          break;
-        case "timing":
-          renderTiming(evt.timing);
-          break;
-        case "error":
-          throw new Error(evt.message);
+        },
+      });
+
+      if (outcome.kind === "done") break;
+      if (outcome.kind === "incomplete") {
+        // 无进展兜底：一轮后内容没增长，停止而非空转。
+        if (markdown.length <= before) break;
+        if (round === MAX_ROUNDS) break; // 到上限：保留已生成内容定稿
+        resume = { sessionId: outcome.sessionId, round: outcome.nextRound };
+        setStatus("继续生成（分段续写）…");
+        continue;
       }
-    });
+      break; // 正常结束（无 done/incomplete 信号）
+    }
 
     // 收尾：定稿最后一章（去光标、挂按钮）。
     renderer.update(markdown, /* streaming */ false);
     clearStatus();
   } catch (err) {
-    // 流中断也保留已生成内容：定稿当前内容，已出现的章节仍可逐章总结。
-    if (renderer) renderer.update(markdown, /* streaming */ false);
-    showError(err instanceof Error ? err.message : String(err));
+    // 用户主动取消：定稿已生成内容（仍可逐章总结），提示已取消，不当成错误。
+    if (abort.signal.aborted) {
+      renderer.update(markdown, /* streaming */ false);
+      setStatus(markdown.trim() ? "已取消生成（保留已生成内容）" : "已取消生成");
+    } else {
+      // 流中断也保留已生成内容：定稿当前内容，已出现的章节仍可逐章总结。
+      renderer.update(markdown, /* streaming */ false);
+      showError(err instanceof Error ? err.message : String(err));
+    }
   } finally {
+    if (genAbort === abort) genAbort = null;
     setBusy(false);
   }
+}
+
+type SegmentOutcome =
+  | { kind: "done" }
+  | { kind: "incomplete"; sessionId: string; nextRound: number }
+  | { kind: "ended" };
+
+/** 跑一段 SSE：一次 fetch + 读流。首段或续段由 opts.resume 决定。 */
+async function runSegment(opts: {
+  url: string;
+  requirement: string;
+  resume: { sessionId: string; round: number } | null;
+  local: { transcript: string; title: string } | null;
+  signal: AbortSignal;
+  getMarkdown: () => string;
+  onDelta: (text: string) => void;
+}): Promise<SegmentOutcome> {
+  const body = opts.resume
+    ? {
+        resume: opts.resume.sessionId,
+        round: opts.resume.round,
+        requirement: opts.requirement,
+        clientArticle: opts.getMarkdown(), // KV 最终一致性后备：服务端按长度取 max
+      }
+    : {
+        url: opts.url,
+        requirement: opts.requirement,
+        // 本地字幕模式：带上解析后的字幕文本与标题，服务端据此跳过线上抓取。
+        ...(opts.local
+          ? { localTranscript: opts.local.transcript, localTitle: opts.local.title }
+          : {}),
+      };
+
+  const res = await fetch("/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: opts.signal,
+  });
+  if (!res.ok || !res.body) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `请求失败 (${res.status})`);
+  }
+
+  let outcome: SegmentOutcome = { kind: "ended" };
+  await readSse(res.body, (evt) => {
+    switch (evt.type) {
+      case "session":
+        sessionId = evt.sessionId;
+        break;
+      case "resume":
+        // 服务端确认续写；已有 markdown 在前端，无需渲染。
+        break;
+      case "status":
+        setStatus(evt.message);
+        break;
+      case "delta":
+        opts.onDelta(evt.text);
+        break;
+      case "chapters":
+        // 章节边界前端已自行推断（## 顺序），保留兼容，无需处理。
+        break;
+      case "timing":
+        renderTiming(evt.timing);
+        break;
+      case "incomplete":
+        outcome = {
+          kind: "incomplete",
+          sessionId: evt.sessionId,
+          nextRound: evt.nextRound,
+        };
+        break;
+      case "done":
+        outcome = { kind: "done" };
+        break;
+      case "error":
+        throw new Error(evt.message);
+    }
+  });
+  return outcome;
 }
 
 /**
@@ -178,9 +355,18 @@ class ChapterRenderer {
   }
 }
 
-/** 点击章节 5W1H 按钮：未开则开+查；已在看同章则收起。点击会主动触发生成。 */
+/**
+ * 点击章节 5W1H 按钮：
+ *  - 已在看同章 **且已生成/生成中** → 收起（toggle 关闭）。
+ *  - 已在看同章 **但仍未生成**（多因滚动联动把面板切到此章只展示「未生成」提示）
+ *    → 触发生成，而不是收起。这正是修复点：否则点击会误判为「再点一次=关闭」，
+ *    导致卡片消失且不生成。
+ *  - 未在看此章 → 打开 + 触发生成。
+ */
 function onFiveW1HClick(chapterId: number, h2: HTMLElement) {
-  if (activeChapter === chapterId) {
+  const generatedOrPending =
+    summaryCache.has(chapterId) || pendingChapters.has(chapterId);
+  if (activeChapter === chapterId && generatedOrPending) {
     closePanel();
     return;
   }
@@ -359,10 +545,13 @@ async function fetchSummary(chapterId: number): Promise<FiveW1H> {
 
 type SseEvent =
   | { type: "session"; sessionId: string }
+  | { type: "resume"; sessionId: string; round: number; restoredChars: number }
   | { type: "status"; message: string }
   | { type: "delta"; text: string }
   | { type: "chapters"; chapters: { id: number; title: string }[] }
   | { type: "timing"; timing: Record<string, number> }
+  | { type: "incomplete"; sessionId: string; round: number; nextRound: number; chars: number }
+  | { type: "done" }
   | { type: "error"; message: string };
 
 async function readSse(
@@ -433,6 +622,7 @@ function resetUi() {
 function setBusy(b: boolean) {
   submitBtn.disabled = b;
   submitBtn.textContent = b ? "生成中…" : "生成文章";
+  cancelBtn.hidden = !b; // 生成中才显示「取消生成」
 }
 function setStatus(msg: string) {
   statusEl.hidden = false;

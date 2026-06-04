@@ -14,8 +14,16 @@
       </header>
 
       <form id="gen-form" class="panel">
+        <div class="field">
+          <span class="field-label">字幕来源</span>
+          <div class="seg" id="source-seg" role="radiogroup" aria-label="字幕来源">
+            <button type="button" class="seg-btn active" data-source="online" role="radio" aria-checked="true">线上</button>
+            <button type="button" class="seg-btn" data-source="local" role="radio" aria-checked="false">本地</button>
+          </div>
+        </div>
+
         <label class="field">
-          <span class="field-label">YouTube 链接</span>
+          <span class="field-label" id="url-label">YouTube 链接</span>
           <input
             id="url"
             type="url"
@@ -24,17 +32,24 @@
           />
         </label>
 
-        <details class="advanced">
-          <summary>生成要求（可选）</summary>
+        <label class="field" id="file-field" hidden>
+          <span class="field-label">本地字幕文件（.srt / .vtt / .txt）</span>
+          <input id="subtitle-file" type="file" accept=".srt,.vtt,.txt,text/plain" />
+          <span class="file-hint" id="file-hint">未选择文件</span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">生成风格</span>
           <textarea
             id="requirement"
             rows="3"
             placeholder="例如：面向产品经理，输出风格专业克制，重点提炼商业模式与定价策略。"
           ></textarea>
-        </details>
+        </label>
 
         <div class="actions">
           <button type="submit" id="submit-btn">生成文章</button>
+          <button type="button" id="cancel-btn" class="link-btn danger" hidden>取消生成</button>
           <button type="button" id="sample-btn" class="link-btn">填入演示视频</button>
         </div>
       </form>

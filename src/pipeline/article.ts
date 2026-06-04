@@ -4,6 +4,7 @@ import { streamTextMimo } from "../llm/mimo";
 import {
   articleSystemInstruction,
   articleUserPrompt,
+  articleContinuePrompt,
   type ChapterStrategy,
 } from "../gemini/prompts";
 
@@ -50,6 +51,65 @@ export async function* streamArticle(
     systemInstruction: system,
     temperature: 0.7,
   });
+}
+
+/** 续写时，比对已生成文章末尾的字符窗口大小：模型最多可能重述这么多字符。 */
+const OVERLAP_WINDOW = 200;
+/** 判定为「重叠」所需的最小匹配长度，避免巧合误裁短串。 */
+const MIN_OVERLAP = 12;
+
+/**
+ * 断点续写：从已生成的部分文章 priorArticle 无缝接着流式产出。
+ * 仅用 Gemini（与 streamArticle 同样的「已产出后不切换」语义）。
+ *
+ * 接缝去重：模型可能重述 priorArticle 的尾部。开头缓冲新流，找出「priorArticle
+ * 末尾 tail 的最长后缀 == 新流 leading 的前缀」并裁掉；缓冲超过窗口仍无重叠则
+ * 判定模型未重述、原样放行。之后转为直通透传。
+ */
+export async function* streamArticleContinue(
+  env: Env,
+  transcript: string,
+  requirement: string,
+  priorArticle: string,
+): AsyncGenerator<string, void, unknown> {
+  const strategy = normalizeStrategy(env.CHAPTER_STRATEGY);
+  const system = articleSystemInstruction(strategy);
+  const prompt = articleContinuePrompt(transcript, requirement, priorArticle);
+
+  const tail = priorArticle.slice(-OVERLAP_WINDOW);
+  let leading = "";
+  let trimming = true;
+
+  for await (const piece of streamText(prompt, {
+    apiKey: env.GEMINI_API_KEY,
+    model: env.GEMINI_MODEL,
+    systemInstruction: system,
+    temperature: 0.7,
+  })) {
+    if (trimming) {
+      leading += piece;
+      const trimmed = dedupeSeam(tail, leading);
+      if (trimmed === null && leading.length < tail.length + OVERLAP_WINDOW) {
+        continue; // 还不能判定，继续缓冲
+      }
+      trimming = false;
+      const out = trimmed ?? leading; // 命中→裁掉重叠；超窗未命中→原样放行
+      if (out) yield out;
+      continue;
+    }
+    yield piece;
+  }
+}
+
+/** 找 tail 的最长后缀同时是 leading 的前缀，命中则返回去掉该重叠后的 leading；否则 null。 */
+function dedupeSeam(tail: string, leading: string): string | null {
+  const max = Math.min(tail.length, leading.length);
+  for (let k = max; k >= MIN_OVERLAP; k--) {
+    if (tail.slice(tail.length - k) === leading.slice(0, k)) {
+      return leading.slice(k);
+    }
+  }
+  return null;
 }
 
 export function normalizeStrategy(raw: string | undefined): ChapterStrategy {

@@ -34,9 +34,9 @@ export function articleSystemInstruction(strategy: ChapterStrategy): string {
   ].join("\n");
 }
 
-/** 文章生成的 user prompt：拼入字幕与可选的用户生成要求。 */
-export function articleUserPrompt(transcript: string, requirement: string): string {
-  const reqBlock = requirement.trim()
+/** 用户生成要求段（软约束）；无要求时为空串。文章首段与续写共用。 */
+function requirementBlock(requirement: string): string {
+  return requirement.trim()
     ? [
         "",
         "【用户的生成要求（软约束）】",
@@ -46,13 +46,45 @@ export function articleUserPrompt(transcript: string, requirement: string): stri
         "不必逐条强行覆盖，但不要引入要求之外的额外风格。",
       ].join("\n")
     : "";
+}
 
+/** 文章生成的 user prompt：拼入字幕与可选的用户生成要求。 */
+export function articleUserPrompt(transcript: string, requirement: string): string {
   return [
     "下面是一段 YouTube 视频字幕。请基于它生成一篇对话体中文文章。",
-    reqBlock,
+    requirementBlock(requirement),
     "",
     "【视频字幕】",
     transcript,
+  ].join("\n");
+}
+
+/**
+ * 续写 user prompt：单段 SSE 在墙钟预算内被截断后，从已生成的部分文章无缝续写。
+ * 关键约束：勿重复已写内容、勿重出标题/开头；先补完最后一个未写完的章节，再续后续章节，
+ * 以保证章节编号跨段单调（前端按 `## ` 顺序对齐的渲染器/按钮不会错位）。
+ */
+export function articleContinuePrompt(
+  transcript: string,
+  requirement: string,
+  priorArticle: string,
+): string {
+  return [
+    "你正在【继续】撰写一篇基于以下 YouTube 字幕的对话体中文文章——它在中途被截断了。",
+    "请从【已生成的部分文章】结束的地方【无缝继续】，遵守：",
+    "- 不要重复已写过的任何内容，不要重新输出文章标题或开头。",
+    "- 直接接着最后的文字往下写；若最后一个章节标题下的正文尚未写完，先把它补完，再继续后续章节。",
+    "- 保持与前文完全一致的体裁（对话体 `说话人: 内容`）、说话人称呼、章节标题层级与编号节奏。",
+    "- 仍遵守原有章节结构约定与「大章节共 4~8 个」的总量目标（含已写章节一并计数）。",
+    requirementBlock(requirement),
+    "",
+    "【视频字幕】",
+    transcript,
+    "",
+    "【已生成的部分文章（请勿重复，直接续写）】",
+    priorArticle,
+    "",
+    "现在请直接续写后续内容：",
   ].join("\n");
 }
 

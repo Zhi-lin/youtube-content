@@ -81,28 +81,24 @@ body::before {
 
 /* ===== Hero ===== */
 .hero {
-  margin-bottom: 32px;
+  margin-bottom: 44px;
 }
+/* 标题参考 OpenAI 首页：大号、偏细（~500）、纯白、紧行高负字距，去渐变去辉光。 */
 .hero h1 {
-  font-size: clamp(28px, 4.4vw, 40px);
-  font-weight: 800;
-  line-height: 1.18;
-  letter-spacing: -0.018em;
-  margin: 0 0 12px;
-  background: linear-gradient(110deg, #ffffff 0%, #cfe9ff 38%, var(--accent) 72%, var(--accent-2) 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  /* 标题霜辉 */
-  filter: drop-shadow(0 2px 18px rgba(94, 209, 255, 0.18));
+  font-size: clamp(40px, 6.4vw, 72px);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.022em;
+  margin: 0 0 18px;
+  color: #fff;
 }
 .subtitle {
   color: var(--text-soft);
-  margin: 6px 0 0;
-  font-size: clamp(15px, 1.9vw, 18px);
-  font-weight: 500;
-  letter-spacing: 0.14em;
+  margin: 0;
+  font-size: clamp(17px, 2.1vw, 22px);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
   opacity: 0.92;
 }
 
@@ -168,26 +164,60 @@ textarea:focus {
   box-shadow: 0 0 0 3px var(--glow-soft), 0 0 22px -4px var(--glow);
 }
 
-.advanced summary {
-  cursor: pointer;
+.field[hidden] { display: none; }
+
+/* ===== 字幕来源切换（分段控件） ===== */
+.seg {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: fit-content;
+}
+/* 覆盖全局 button 的蓝色渐变：分段按钮为低调底色，仅选中态高亮。 */
+.seg-btn {
+  background: none;
   color: var(--muted);
-  font-size: 13.5px;
-  font-weight: 500;
-  user-select: none;
-  transition: color 0.15s ease;
-  list-style: none;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow: none;
 }
-.advanced summary::-webkit-details-marker { display: none; }
-.advanced summary::before {
-  content: "▸";
-  display: inline-block;
-  margin-right: 7px;
-  color: var(--accent);
-  transition: transform 0.18s ease;
+.seg-btn:hover:not(.active) { transform: none; filter: none; color: var(--text-soft); }
+.seg-btn.active {
+  background: linear-gradient(135deg, var(--accent) 0%, #4ab8ec 100%);
+  color: #04121b;
+  box-shadow: 0 4px 16px -6px var(--glow), 0 0 0 1px rgba(94, 209, 255, 0.25) inset;
 }
-.advanced[open] summary::before { transform: rotate(90deg); }
-.advanced summary:hover { color: var(--text-soft); }
-.advanced textarea { margin-top: 12px; }
+
+/* ===== 本地字幕文件输入 ===== */
+input[type="file"] {
+  padding: 10px 12px;
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 14px;
+}
+input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 7px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text-soft);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+input[type="file"]::file-selector-button:hover { color: var(--accent); border-color: var(--accent); }
+.file-hint { font-size: 12.5px; color: var(--faint); }
+.file-hint.ok { color: var(--accent-2); }
+.file-hint.err { color: #ff7a7a; }
 
 .actions { display: flex; align-items: center; gap: 18px; padding-top: 2px; }
 
@@ -226,8 +256,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
   color: var(--accent-2);
   text-shadow: 0 0 12px var(--glow);
 }
+.link-btn.danger { color: var(--muted); }
+.link-btn.danger:hover:not(:disabled) { color: #ff7a7a; text-shadow: none; }
+.link-btn[hidden] { display: none; }
 
 /* ===== Status ===== */
+/* hidden 属性优先：display:flex 会覆盖原生 [hidden]，需显式声明，否则空状态栏会在加载时露出。 */
+.status[hidden] { display: none; }
 .status {
   margin-top: 26px;
   padding: 13px 18px;
