@@ -359,13 +359,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
 /* ===== 5W1H 按钮与卡片 ===== */
 /* 5W1H 按钮三态：未生成=灰 / 生成中=蓝闪 / 完成=绿。默认为未生成态。 */
+/* 默认（待生成）：黄色描边。 */
 .w5h1-btn {
   font-size: 11.5px;
   font-weight: 700;
   letter-spacing: 0.04em;
   background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border-strong);
+  color: #ffcf5e;
+  border: 1px solid #ffcf5e;
   border-radius: 7px;
   padding: 3px 10px;
   line-height: 1.4;
@@ -374,20 +375,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
     color 0.16s ease, box-shadow 0.16s ease, transform 0.14s ease;
 }
 .w5h1-btn:hover {
-  color: var(--text-soft);
-  border-color: var(--muted);
+  color: #ffdd8a;
+  border-color: #ffdd8a;
   transform: translateY(-1px);
 }
 
-/* 生成中：蓝色 + 呼吸闪动。 */
+/* 生成中：红色 + 呼吸闪动。 */
 .w5h1-btn.loading {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: #ff6b6b;
+  border-color: #ff6b6b;
   animation: w5h1-pulse 1.1s ease-in-out infinite;
 }
 @keyframes w5h1-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(94, 209, 255, 0); }
-  50% { box-shadow: 0 0 16px -2px var(--glow); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
+  50% { box-shadow: 0 0 16px -2px rgba(255, 107, 107, 0.55); }
 }
 
 /* 完成：绿色实心。 */
